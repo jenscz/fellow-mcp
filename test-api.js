@@ -20,8 +20,8 @@ async function test() {
   console.log();
 
   try {
-    // Test listing recordings
-    console.log("1. Testing POST /recordings...");
+    // Test listing recordings with date filter
+    console.log("1. Testing POST /recordings with created_at_start=2026-01-26...");
     const recordingsRes = await fetch(`${baseUrl}/recordings`, {
       method: "POST",
       headers: {
@@ -29,18 +29,29 @@ async function test() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        pagination: { cursor: null, page_size: 5 },
+        filters: {
+          created_at_start: '2026-01-26'
+        },
+        pagination: { cursor: null, page_size: 20 },
       }),
     });
 
     console.log(`   Status: ${recordingsRes.status} ${recordingsRes.statusText}`);
     const recordingsData = await recordingsRes.json();
-    console.log(`   Response:`, JSON.stringify(recordingsData, null, 2));
+    console.log(`   Number of recordings: ${recordingsData.recordings?.data?.length || 0}`);
+    if (recordingsData.recordings?.data?.length > 0) {
+      console.log(`   First 3 recordings:`);
+      recordingsData.recordings.data.slice(0, 3).forEach(r => {
+        console.log(`     - ${r.title}`);
+        console.log(`       created_at: ${r.created_at}`);
+        console.log(`       event_start: ${r.event_start}`);
+      });
+    }
     console.log();
 
-    // Test listing notes
-    console.log("2. Testing POST /notes...");
-    const notesRes = await fetch(`${baseUrl}/notes`, {
+    // Test listing recordings without filter
+    console.log("2. Testing POST /recordings without filters...");
+    const allRecordingsRes = await fetch(`${baseUrl}/recordings`, {
       method: "POST",
       headers: {
         "X-API-KEY": apiKey,
@@ -51,9 +62,16 @@ async function test() {
       }),
     });
 
-    console.log(`   Status: ${notesRes.status} ${notesRes.statusText}`);
-    const notesData = await notesRes.json();
-    console.log(`   Response:`, JSON.stringify(notesData, null, 2));
+    console.log(`   Status: ${allRecordingsRes.status} ${allRecordingsRes.statusText}`);
+    const allRecordingsData = await allRecordingsRes.json();
+    console.log(`   Number of recordings: ${allRecordingsData.recordings?.data?.length || 0}`);
+    if (allRecordingsData.recordings?.data?.length > 0) {
+      console.log(`   First recording:`);
+      const r = allRecordingsData.recordings.data[0];
+      console.log(`     - ${r.title}`);
+      console.log(`       created_at: ${r.created_at}`);
+      console.log(`       event_start: ${r.event_start}`);
+    }
 
   } catch (error) {
     console.error("Error:", error.message);

@@ -83,7 +83,9 @@ class FellowClient {
   private async request<T>(
     method: string,
     endpoint: string,
-    body?: unknown
+    body?: unknown,
+    retryCount = 0,
+    maxRetries = 3
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const options: RequestInit = {
@@ -98,16 +100,36 @@ class FellowClient {
       options.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, options);
+    try {
+      const response = await fetch(url, options);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Fellow API error (${response.status}): ${errorText}`
-      );
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        // Retry on 500 errors if we haven't exceeded max retries
+        if (response.status >= 500 && retryCount < maxRetries) {
+          const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return this.request<T>(method, endpoint, body, retryCount + 1, maxRetries);
+        }
+
+        throw new Error(
+          `Fellow API error (${response.status}): ${errorText}`
+        );
+      }
+
+      const responseData = await response.json() as T;
+      return responseData;
+    } catch (error) {
+      // Network errors or JSON parse errors
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (retryCount < maxRetries && (error instanceof TypeError || errorMessage.includes("fetch"))) {
+        const delay = Math.pow(2, retryCount) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.request<T>(method, endpoint, body, retryCount + 1, maxRetries);
+      }
+      throw error;
     }
-
-    return response.json() as Promise<T>;
   }
 
   async listRecordings(options: {
@@ -222,11 +244,11 @@ const tools: Tool[] = [
         },
         created_at_start: {
           type: "string",
-          description: "Filter meetings created after this date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)",
+          description: "Filter meetings created on or after this date (inclusive). ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ. To search for meetings on a specific day, set both created_at_start and created_at_end to the same date.",
         },
         created_at_end: {
           type: "string",
-          description: "Filter meetings created before this date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)",
+          description: "Filter meetings created before this date (exclusive). ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ. If set to the same date as created_at_start, the end date is automatically adjusted to the next day to include the full day.",
         },
         limit: {
           type: "number",
@@ -325,6 +347,10 @@ const tools: Tool[] = [
         include_transcripts: {
           type: "boolean",
           description: "If true, also fetches and stores transcripts. This is slower but enables local transcript search.",
+        },
+        page_size: {
+          type: "number",
+          description: "Number of items to fetch per page (1-50). Default is 50. Use smaller values if sync fails with 500 errors.",
         },
       },
     },
@@ -474,7 +500,7 @@ interface SyncResult {
 async function syncNotesFromApi(
   client: FellowClient,
   db: FellowDatabase,
-  options: { since?: string; includeTranscripts?: boolean } = {}
+  options: { since?: string; includeTranscripts?: boolean; pageSize?: number } = {}
 ): Promise<SyncResult> {
   const result: SyncResult = {
     notes_synced: 0,
@@ -484,98 +510,142 @@ async function syncNotesFromApi(
   };
 
   let cursor: string | null = null;
-  const pageSize = 50;
+  const pageSize = options.pageSize ?? 50;
 
   // Fetch notes with content and attendees
+  let notesPageCount = 0;
+  let consecutiveErrors = 0;
+  const maxConsecutiveErrors = 3;
+  
   do {
-    const notesResp = await client.listNotes({
-      updated_at_start: options.since,
-      include_content: true,
-      include_attendees: true,
-      cursor: cursor ?? undefined,
-      page_size: pageSize,
-    });
-
-    for (const note of notesResp.notes.data) {
-      // Store note
-      db.upsertNote({
-        id: note.id,
-        title: note.title,
-        created_at: note.created_at,
-        updated_at: note.updated_at,
-        event_start: note.event_start ?? null,
-        event_end: note.event_end ?? null,
-        event_guid: note.event_guid ?? null,
-        call_url: note.call_url ?? null,
-        content_markdown: note.content_markdown ?? null,
+    notesPageCount++;
+    
+    try {
+      const notesResp = await client.listNotes({
+        updated_at_start: options.since,
+        include_content: true,
+        include_attendees: true,
+        cursor: cursor ?? undefined,
+        page_size: pageSize,
       });
-      result.notes_synced++;
 
-      // Extract and store action items
-      if (note.content_markdown) {
-        db.clearActionItemsForNote(note.id);
-        const actionItems = extractActionItems(note.content_markdown);
-        for (const item of actionItems) {
-          db.insertActionItem({
-            note_id: note.id,
-            content: item.content,
-            assignee: item.assignee,
-            due_date: item.due_date,
-            is_completed: item.is_completed,
-            created_at: new Date().toISOString(),
-          });
-          result.action_items_found++;
+      consecutiveErrors = 0; // Reset error counter on success
+
+      for (const note of notesResp.notes.data) {
+        // Store note
+        db.upsertNote({
+          id: note.id,
+          title: note.title,
+          created_at: note.created_at,
+          updated_at: note.updated_at,
+          event_start: note.event_start ?? null,
+          event_end: note.event_end ?? null,
+          event_guid: note.event_guid ?? null,
+          call_url: note.call_url ?? null,
+          content_markdown: note.content_markdown ?? null,
+        });
+        result.notes_synced++;
+
+        // Extract and store action items
+        if (note.content_markdown) {
+          db.clearActionItemsForNote(note.id);
+          const actionItems = extractActionItems(note.content_markdown);
+          for (const item of actionItems) {
+            db.insertActionItem({
+              note_id: note.id,
+              content: item.content,
+              assignee: item.assignee,
+              due_date: item.due_date,
+              is_completed: item.is_completed,
+              created_at: new Date().toISOString(),
+            });
+            result.action_items_found++;
+          }
         }
-      }
 
-      // Store participants
-      if (note.event_attendees && note.event_attendees.length > 0) {
-        db.clearParticipantsForNote(note.id);
-        for (const email of note.event_attendees) {
-          if (email && typeof email === "string" && email.trim()) {
-            db.insertParticipant(note.id, email.trim());
-            result.participants_synced++;
+        // Store participants
+        if (note.event_attendees && note.event_attendees.length > 0) {
+          db.clearParticipantsForNote(note.id);
+          for (const email of note.event_attendees) {
+            if (email && typeof email === "string" && email.trim()) {
+              db.insertParticipant(note.id, email.trim());
+              result.participants_synced++;
+            }
           }
         }
       }
-    }
 
-    cursor = notesResp.notes.page_info.cursor;
+      cursor = notesResp.notes.page_info.cursor;
+    } catch (error) {
+      consecutiveErrors++;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // If we hit 500 errors multiple times in a row, stop trying
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        break;
+      }
+      
+      // For 500 errors after retries, try to continue with next page if possible
+      // But if we don't have a cursor or hit max errors, we have to stop
+      if (!cursor || errorMessage.includes("500")) {
+        break;
+      }
+    }
   } while (cursor);
 
   // Fetch recordings (optionally with transcripts)
   cursor = null;
+  let recordingsPageCount = 0;
+  consecutiveErrors = 0;
+  
   do {
-    const recordingsResp = await client.listRecordings({
-      updated_at_start: options.since,
-      include_transcript: options.includeTranscripts ?? false,
-      cursor: cursor ?? undefined,
-      page_size: pageSize,
-    });
-
-    for (const recording of recordingsResp.recordings.data) {
-      // Skip if note doesn't exist in DB (can happen with incremental sync)
-      if (recording.note_id && !db.getNote(recording.note_id)) {
-        continue;
-      }
-      db.upsertRecording({
-        id: recording.id,
-        note_id: recording.note_id,
-        title: recording.title,
-        created_at: recording.created_at,
-        updated_at: recording.updated_at,
-        event_start: recording.event_start ?? null,
-        event_end: recording.event_end ?? null,
-        recording_start: recording.recording_start ?? null,
-        recording_end: recording.recording_end ?? null,
-        event_guid: recording.event_guid ?? null,
-        call_url: recording.call_url ?? null,
-        transcript_json: recording.transcript ? JSON.stringify(recording.transcript) : null,
+    recordingsPageCount++;
+    
+    try {
+      const recordingsResp = await client.listRecordings({
+        updated_at_start: options.since,
+        include_transcript: options.includeTranscripts ?? false,
+        cursor: cursor ?? undefined,
+        page_size: pageSize,
       });
-      result.recordings_synced++;
-    }
 
-    cursor = recordingsResp.recordings.page_info.cursor;
+      consecutiveErrors = 0; // Reset error counter on success
+
+      for (const recording of recordingsResp.recordings.data) {
+        // Skip if note doesn't exist in DB (can happen with incremental sync)
+        if (recording.note_id && !db.getNote(recording.note_id)) {
+          continue;
+        }
+        db.upsertRecording({
+          id: recording.id,
+          note_id: recording.note_id,
+          title: recording.title,
+          created_at: recording.created_at,
+          updated_at: recording.updated_at,
+          event_start: recording.event_start ?? null,
+          event_end: recording.event_end ?? null,
+          recording_start: recording.recording_start ?? null,
+          recording_end: recording.recording_end ?? null,
+          event_guid: recording.event_guid ?? null,
+          call_url: recording.call_url ?? null,
+          transcript_json: recording.transcript ? JSON.stringify(recording.transcript) : null,
+        });
+        result.recordings_synced++;
+      }
+
+      cursor = recordingsResp.recordings.page_info.cursor;
+    } catch (error) {
+      consecutiveErrors++;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        break;
+      }
+      
+      if (!cursor || errorMessage.includes("500")) {
+        break;
+      }
+    }
   } while (cursor);
 
   // Update last sync time
@@ -716,6 +786,36 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Helper to format ISO timestamps to local time
+function formatDateTime(isoString: string | null | undefined): string {
+  if (!isoString) return "N/A";
+  
+  try {
+    const date = new Date(isoString);
+    // Check if date is valid
+    if (isNaN(date.getTime())) return isoString;
+    
+    // Format as local date and time
+    // Example: "Jan 26, 2026, 2:30 PM"
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    // If parsing fails, return original string
+    return isoString;
+  }
+}
+
+// Helper to construct Fellow URLs
+function getFellowUrl(subdomain: string, eventGuid: string | null | undefined): string | null {
+  return eventGuid ? `https://${subdomain}.fellow.app/meetings/${eventGuid}` : null;
+}
+
 // Handle tool calls
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
@@ -728,12 +828,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case "search_meetings": {
-        const { title, created_at_start, created_at_end, limit } = args as {
+        let { title, created_at_start, created_at_end, limit } = args as {
           title?: string;
           created_at_start?: string;
           created_at_end?: string;
           limit?: number;
         };
+
+        // Fix: If created_at_end equals created_at_start, increment by 1 day
+        // The Fellow API treats created_at_end as exclusive, so same-day queries need end = start + 1 day
+        if (created_at_start && created_at_end && created_at_start === created_at_end) {
+          const startDate = new Date(created_at_start);
+          startDate.setDate(startDate.getDate() + 1);
+          created_at_end = startDate.toISOString().split('T')[0]; // Get YYYY-MM-DD format
+        }
 
         const recordingsResp = await client.listRecordings({
           title,
@@ -742,14 +850,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           page_size: Math.min(limit ?? 20, 50),
         });
 
+        const { subdomain } = parseArgs();
         const results = recordingsResp.recordings.data.map((r) => ({
           id: r.id,
           title: r.title,
           note_id: r.note_id,
           event_start: r.event_start,
+          event_start_local: formatDateTime(r.event_start),
           event_end: r.event_end,
           created_at: r.created_at,
           call_url: r.call_url,
+          event_guid: r.event_guid,
+          fellow_url: getFellowUrl(subdomain, r.event_guid),
         }));
 
         return {
@@ -821,11 +933,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? formatTranscript(recordingWithTranscript.transcript)
           : "No transcript available for this recording.";
 
+        const { subdomain } = parseArgs();
+        const fellowUrl = getFellowUrl(subdomain, recordingWithTranscript.event_guid);
+
         return {
           content: [
             {
               type: "text",
-              text: `# Transcript: ${recordingWithTranscript.title}\n\nRecording ID: ${recordingWithTranscript.id}\nEvent Start: ${recordingWithTranscript.event_start ?? "N/A"}\n\n${transcriptText}`,
+              text: `# Transcript: ${recordingWithTranscript.title}\n\nRecording ID: ${recordingWithTranscript.id}\nEvent Start: ${formatDateTime(recordingWithTranscript.event_start)}\n${fellowUrl ? `Fellow URL: ${fellowUrl}\n` : ""}\n${transcriptText}`,
             },
           ],
         };
@@ -879,6 +994,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let noteContent: string | null = null;
         let noteTitle: string = meeting_title ?? "Unknown Meeting";
         let eventStart: string | null = null;
+        let eventGuid: string | null = null;
 
         if (noteId) {
           const notesResp = await client.listNotes({
@@ -889,6 +1005,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (note) {
             noteTitle = note.title;
             eventStart = note.event_start ?? null;
+            eventGuid = note.event_guid ?? null;
             noteContent = note.content_markdown ?? null;
           }
         }
@@ -919,10 +1036,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Build response with both note and transcript
+        const { subdomain } = parseArgs();
+        const fellowUrl = getFellowUrl(subdomain, eventGuid);
+
         let response = `# Meeting Summary: ${noteTitle}\n\n`;
         response += `Note ID: ${noteId ?? "N/A"}\n`;
         response += `Recording ID: ${targetRecordingId ?? "N/A"}\n`;
-        response += `Event Start: ${eventStart ?? "N/A"}\n\n`;
+        response += `Event Start: ${formatDateTime(eventStart)}\n`;
+        if (fellowUrl) response += `Fellow URL: ${fellowUrl}\n`;
+        response += "\n";
 
         if (noteContent) {
           response += `## Notes\n\n${noteContent}\n\n`;
@@ -989,11 +1111,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return line;
         });
 
+        const { subdomain } = parseArgs();
+        const fellowUrl = getFellowUrl(subdomain, note.event_guid);
+
         return {
           content: [
             {
               type: "text",
-              text: `# Action Items: ${note.title}\n\nNote ID: ${note.id}\nEvent Start: ${note.event_start ?? "N/A"}\n\n${
+              text: `# Action Items: ${note.title}\n\nNote ID: ${note.id}\nEvent Start: ${formatDateTime(note.event_start)}\n${fellowUrl ? `Fellow URL: ${fellowUrl}\n` : ""}\n${
                 formattedItems.length > 0
                   ? formattedItems.join("\n")
                   : "No action items found in this meeting."
@@ -1039,11 +1164,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const attendees = note.event_attendees ?? [];
 
+        const { subdomain } = parseArgs();
+        const fellowUrl = getFellowUrl(subdomain, note.event_guid);
+
         return {
           content: [
             {
               type: "text",
-              text: `# Participants: ${note.title}\n\nNote ID: ${note.id}\nEvent Start: ${note.event_start ?? "N/A"}\n\n${
+              text: `# Participants: ${note.title}\n\nNote ID: ${note.id}\nEvent Start: ${formatDateTime(note.event_start)}\n${fellowUrl ? `Fellow URL: ${fellowUrl}\n` : ""}\n${
                 attendees.length > 0
                   ? `Total participants: ${attendees.length}\n\n${attendees.map((email) => `- ${email}`).join("\n")}`
                   : "No participant information available for this meeting."
@@ -1054,19 +1182,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "sync_meetings": {
-        const { force, include_transcripts } = args as {
+        const { force, include_transcripts, page_size } = args as {
           force?: boolean;
           include_transcripts?: boolean;
+          page_size?: number;
         };
 
         const db = getDatabase();
         let result: SyncResult;
 
+        // Validate page_size
+        const validatedPageSize = page_size && page_size >= 1 && page_size <= 50 ? page_size : undefined;
+        if (page_size && !validatedPageSize) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: page_size must be between 1 and 50",
+              },
+            ],
+            isError: true,
+          };
+        }
+
         if (force) {
           // Full sync - clear existing data first
           // Note: We don't have a clearAll method, but the upserts will update existing records
           // and we clear action items/participants per-note during sync
-          result = await syncNotesFromApi(client, db, { includeTranscripts: include_transcripts });
+          result = await syncNotesFromApi(client, db, { 
+            includeTranscripts: include_transcripts,
+            pageSize: validatedPageSize
+          });
         } else {
           // Incremental sync
           const syncResult = await performIncrementalSync(client, db);
@@ -1079,7 +1225,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: `# Sync Complete\n\nMode: ${force ? "Full" : "Incremental"}\n\n## This Sync:\n- Notes synced: ${result.notes_synced}\n- Recordings synced: ${result.recordings_synced}\n- Action items found: ${result.action_items_found}\n- Participants synced: ${result.participants_synced}\n\n## Database Totals:\n- Total notes: ${stats.notes}\n- Total recordings: ${stats.recordings}\n- Total action items: ${stats.action_items}\n- Unique participants: ${stats.participants}\n\nLast sync: ${db.getLastSyncTime()}`,
+              text: `# Sync Complete\n\nMode: ${force ? "Full" : "Incremental"}${validatedPageSize ? `\nPage size: ${validatedPageSize}` : ""}\n\n## This Sync:\n- Notes synced: ${result.notes_synced}\n- Recordings synced: ${result.recordings_synced}\n- Action items found: ${result.action_items_found}\n- Participants synced: ${result.participants_synced}\n\n## Database Totals:\n- Total notes: ${stats.notes}\n- Total recordings: ${stats.recordings}\n- Total action items: ${stats.action_items}\n- Unique participants: ${stats.participants}\n\nLast sync: ${db.getLastSyncTime()}`,
             },
           ],
         };
@@ -1144,10 +1290,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (since) output += `Since: ${since}\n`;
         output += `Showing: ${show_completed ? "all" : "incomplete only"}\n\n`;
 
+        const { subdomain } = parseArgs();
+
         for (const [noteId, items] of byMeeting) {
           const firstItem = items[0];
+          const note = db.getNote(noteId);
+          const fellowUrl = getFellowUrl(subdomain, note?.event_guid);
+          
           output += `## ${firstItem.note_title}\n`;
-          output += `Date: ${firstItem.event_start ?? "N/A"}\n\n`;
+          output += `Date: ${formatDateTime(firstItem.event_start)}\n`;
+          if (fellowUrl) output += `Fellow URL: ${fellowUrl}\n`;
+          output += "\n";
           
           for (const item of items) {
             output += `- ${item.is_completed ? "[x]" : "[ ]"} ${item.content}`;
@@ -1204,12 +1357,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let output = `# Meetings with ${require_all ? "all of" : "any of"}: ${emails.join(", ")}\n\n`;
         output += `Found ${meetings.length} meetings:\n\n`;
 
+        const { subdomain } = parseArgs();
+
         for (const meeting of meetings) {
           const participants = db.getParticipantsForNote(meeting.id);
+          const fellowUrl = getFellowUrl(subdomain, meeting.event_guid);
+          
           output += `## ${meeting.title}\n`;
-          output += `- Date: ${meeting.event_start ?? "N/A"}\n`;
+          output += `- Date: ${formatDateTime(meeting.event_start)}\n`;
           output += `- Note ID: ${meeting.id}\n`;
           output += `- Participants: ${participants.length}\n`;
+          if (fellowUrl) output += `- Fellow URL: ${fellowUrl}\n`;
           output += "\n";
         }
 
@@ -1254,10 +1412,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let output = `# Search Results for: "${query}"\n\n`;
         output += `Found ${notes.length} meetings:\n\n`;
 
+        const { subdomain } = parseArgs();
+
         for (const note of notes) {
+          const fellowUrl = getFellowUrl(subdomain, note.event_guid);
+          
           output += `## ${note.title}\n`;
-          output += `- Date: ${note.event_start ?? "N/A"}\n`;
+          output += `- Date: ${formatDateTime(note.event_start)}\n`;
           output += `- Note ID: ${note.id}\n`;
+          if (fellowUrl) output += `- Fellow URL: ${fellowUrl}\n`;
           
           // Show a snippet of matching content
           if (note.content_markdown) {

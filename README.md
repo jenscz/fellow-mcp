@@ -143,6 +143,17 @@ The database stores:
 ## Development
 
 ```bash
+# Clone the repository
+git clone <repo-url>
+cd fellow-mcp
+
+# Install dependencies
+npm install
+
+# Create .env file with your credentials
+echo "FELLOW_API_KEY=your_api_key_here" > .env
+echo "FELLOW_SUBDOMAIN=your_subdomain" >> .env
+
 # Watch mode for development
 npm run dev
 
@@ -151,6 +162,9 @@ npm run build
 
 # Test API connection
 node --env-file=.env test-api.js
+
+# Test MCP server
+FELLOW_API_KEY=your_key FELLOW_SUBDOMAIN=your_subdomain node test-mcp.js
 ```
 
 ## Requirements

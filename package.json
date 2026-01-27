@@ -1,6 +1,6 @@
 {
   "name": "fellow-mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "MCP server for Fellow.ai API - access meeting data, transcripts, summaries, and action items",
   "type": "module",
   "main": "dist/index.js",
@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
@@ -20,6 +21,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc -w",
+    "test-sync": "npm run build && node dist/index.js --test",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
