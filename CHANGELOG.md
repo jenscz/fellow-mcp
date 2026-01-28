@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-01-28
+
+### Fixed
+- `search_meetings` now shows actual meeting times instead of "N/A" by enriching recordings with event_start from associated notes
+- Automatically fetches note data from Fellow API if not in local database to get accurate meeting times
+- Fixed `getNote` API method to properly parse response structure
+
+### Changed
+- Removed confusing `created_at` field from `search_meetings` results (was showing when meeting was logged, not when it occurred)
+- `search_meetings` now displays actual meeting times in local timezone for better user experience
+
 ## [1.0.3] - 2026-01-27
 
 ### Added
@@ -51,7 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full-text search across cached notes
 - Find meetings by participant
 
-[Unreleased]: https://github.com/liba2k/fellow-mcp/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/liba2k/fellow-mcp/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/liba2k/fellow-mcp/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/liba2k/fellow-mcp/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/liba2k/fellow-mcp/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/liba2k/fellow-mcp/compare/v1.0.0...v1.0.1

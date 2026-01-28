@@ -73,10 +73,9 @@ setTimeout(() => {
       params: {
         name: 'search_meetings',
         arguments: {
-          title: 'iqt',
-          created_at_start: '2026-01-26',
-          created_at_end: '2026-01-26',
-          limit: 10
+          created_at_start: '2026-01-27',
+          created_at_end: '2026-01-27',
+          limit: 5
         }
       }
     };

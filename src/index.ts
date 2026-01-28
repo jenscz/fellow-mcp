@@ -225,7 +225,8 @@ class FellowClient {
   }
 
   async getNote(noteId: string): Promise<Note> {
-    return this.request<Note>("GET", `/note/${noteId}`);
+    const response = await this.request<{ note: Note }>("GET", `/note/${noteId}`);
+    return response.note;
   }
 }
 
@@ -851,17 +852,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         const { subdomain } = parseArgs();
-        const results = recordingsResp.recordings.data.map((r) => ({
-          id: r.id,
-          title: r.title,
-          note_id: r.note_id,
-          event_start: r.event_start,
-          event_start_local: formatDateTime(r.event_start),
-          event_end: r.event_end,
-          created_at: r.created_at,
-          call_url: r.call_url,
-          event_guid: r.event_guid,
-          fellow_url: getFellowUrl(subdomain, r.event_guid),
+        const db = getDatabase();
+        
+        // Enrich recordings with event_start from notes
+        // Use Promise.all to fetch notes from API in parallel if needed
+        const results = await Promise.all(recordingsResp.recordings.data.map(async (r) => {
+          // Try to get event_start from the associated note
+          let eventStart = r.event_start;
+          if (!eventStart && r.note_id) {
+            // First check local database
+            const localNote = db.getNote(r.note_id);
+            if (localNote?.event_start) {
+              eventStart = localNote.event_start;
+            } else {
+              // If not in DB, fetch from API
+              try {
+                const apiNote = await client.getNote(r.note_id);
+                if (apiNote?.event_start) {
+                  eventStart = apiNote.event_start;
+                }
+              } catch (error) {
+                // Silently fail - we'll just show N/A for event_start
+              }
+            }
+          }
+          
+          return {
+            id: r.id,
+            title: r.title,
+            note_id: r.note_id,
+            event_start: eventStart,
+            event_start_local: formatDateTime(eventStart),
+            event_end: r.event_end,
+            call_url: r.call_url,
+            event_guid: r.event_guid,
+            fellow_url: getFellowUrl(subdomain, r.event_guid),
+          };
         }));
 
         return {
