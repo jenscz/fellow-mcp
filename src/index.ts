@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+,#!/usr/bin/env node
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -22,6 +22,15 @@ interface Transcript {
   speech_segments: SpeechSegment[];
 }
 
+interface AiNoteSection {
+  title: string;
+  content: unknown;
+}
+
+interface AiNote {
+  sections?: AiNoteSection[];
+}
+
 interface Recording {
   id: string;
   title: string;
@@ -35,6 +44,7 @@ interface Recording {
   event_guid?: string;
   call_url?: string;
   transcript?: Transcript;
+  ai_notes?: AiNote[];
 }
 
 interface Note {
@@ -141,6 +151,7 @@ class FellowClient {
     event_guid?: string;
     channel_id?: string;
     include_transcript?: boolean;
+    include_ai_notes?: boolean;
     cursor?: string;
     page_size?: number;
   }): Promise<RecordingsResponse> {
@@ -161,8 +172,11 @@ class FellowClient {
     }
 
     // Build include
-    if (options.include_transcript) {
-      body.include = { transcript: true };
+    const include: Record<string, boolean> = {};
+    if (options.include_transcript) include.transcript = true;
+    if (options.include_ai_notes) include.ai_notes = true;
+    if (Object.keys(include).length > 0) {
+      body.include = include;
     }
 
     // Build pagination
@@ -810,25 +824,6 @@ function parseAssigneeAndDueDate(text: string): { assignee: string | null; dueDa
 }
 
 
-// Helper: find recording with ai_notes or transcript
-async function findRecording(client: FellowClient, recording_id?: string, meeting_title?: string, includeTranscript = false, includeAiNotes = false): Promise<Recording | null> {
-  if (recording_id) {
-    const resp = await client.listRecordings({
-      include_transcript: includeTranscript,
-      page_size: 50,
-    });
-    // listRecordings doesn't pass ai_notes, so we need raw fetch for ai_notes
-    return resp.recordings.data.find((r) => r.id === recording_id) ?? null;
-  } else if (meeting_title) {
-    const resp = await client.listRecordings({
-      title: meeting_title,
-      include_transcript: includeTranscript,
-      page_size: 1,
-    });
-    return resp.recordings.data[0] ?? null;
-  }
-  return null;
-}
 
 // Format transcript for output
 function formatTranscript(transcript: Transcript): string {
@@ -1563,27 +1558,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           meeting_title?: string;
         };
 
-        // We need ai_notes which requires raw API call
-        const { subdomain, apiKey } = parseArgs();
-        const searchBody: Record<string, unknown> = {
-          include: { ai_notes: true },
-          pagination: { cursor: null, page_size: 50 },
-        };
-        if (meeting_title) {
-          searchBody.filters = { title: meeting_title };
-          (searchBody.pagination as Record<string, unknown>).page_size = 1;
+        if (!recording_id && !meeting_title) {
+          return { content: [{ type: "text", text: "Please provide a recording_id or meeting_title." }] };
         }
 
-        const topicsResp = await fetch(`https://${subdomain}.fellow.app/api/v1/recordings`, {
-          method: "POST",
-          headers: { "X-API-KEY": apiKey, "Content-Type": "application/json" },
-          body: JSON.stringify(searchBody),
-        });
-        const topicsData = await topicsResp.json() as { recordings: { data: Array<{ id: string; title: string; ai_notes?: Array<{ sections?: Array<{ title: string; content: unknown }> }> }> } };
-        
-        let targetRec = recording_id
-          ? topicsData.recordings.data.find((r: { id: string }) => r.id === recording_id)
-          : topicsData.recordings.data[0];
+        let targetRec: Recording | undefined;
+        if (recording_id) {
+          // Paginate to find the specific recording
+          let cursor: string | null = null;
+          do {
+            const resp = await client.listRecordings({
+              include_ai_notes: true,
+              cursor: cursor ?? undefined,
+              page_size: 50,
+            });
+            targetRec = resp.recordings.data.find((r) => r.id === recording_id);
+            cursor = targetRec ? null : resp.recordings.page_info.cursor;
+          } while (!targetRec && cursor);
+        } else {
+          const resp = await client.listRecordings({
+            title: meeting_title,
+            include_ai_notes: true,
+            page_size: 1,
+          });
+          targetRec = resp.recordings.data[0];
+        }
 
         if (!targetRec) {
           return { content: [{ type: "text", text: "Recording not found." }] };
@@ -1643,16 +1642,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           to_seconds: number;
         };
 
-        // Fetch recording with transcript
-        const recResp = await client.listRecordings({
-          ...(meeting_title ? { title: meeting_title } : {}),
-          include_transcript: true,
-          page_size: meeting_title ? 1 : 50,
-        });
+        if (!recording_id && !meeting_title) {
+          return { content: [{ type: "text", text: "Please provide a recording_id or meeting_title." }] };
+        }
 
-        let targetRecording = recording_id
-          ? recResp.recordings.data.find((r) => r.id === recording_id)
-          : recResp.recordings.data[0];
+        let targetRecording: Recording | undefined;
+        if (recording_id) {
+          // Paginate to find the specific recording
+          let cursor: string | null = null;
+          do {
+            const resp = await client.listRecordings({
+              include_transcript: true,
+              cursor: cursor ?? undefined,
+              page_size: 50,
+            });
+            targetRecording = resp.recordings.data.find((r) => r.id === recording_id);
+            cursor = targetRecording ? null : resp.recordings.page_info.cursor;
+          } while (!targetRecording && cursor);
+        } else {
+          const resp = await client.listRecordings({
+            title: meeting_title,
+            include_transcript: true,
+            page_size: 1,
+          });
+          targetRecording = resp.recordings.data[0];
+        }
 
         if (!targetRecording?.transcript?.speech_segments) {
           return { content: [{ type: "text", text: "Recording or transcript not found." }] };
@@ -1689,11 +1703,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    // Sanitize: remove anything that looks like an API key from error messages
+    const sanitized = errorMessage.replace(/\b(flw_|key[_-]?)[a-zA-Z0-9]{8,}\b/gi, "[REDACTED]");
     return {
       content: [
         {
           type: "text",
-          text: `Error: ${errorMessage}`,
+          text: `Error: ${sanitized}`,
         },
       ],
       isError: true,

@@ -1,6 +1,6 @@
 {
   "name": "fellow-mcp",
-  "version": "1.0.4",
+  "version": "2.0.0",
   "description": "MCP server for Fellow.ai API - access meeting data, transcripts, summaries, and action items",
   "type": "module",
   "main": "dist/index.js",
@@ -35,16 +35,16 @@
     "llm",
     "claude"
   ],
-  "author": "Itai Liba",
+  "author": "jenscz",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/liba2k/fellow-mcp.git"
+    "url": "git+https://github.com/jenscz/fellow-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/liba2k/fellow-mcp/issues"
+    "url": "https://github.com/jenscz/fellow-mcp/issues"
   },
-  "homepage": "https://github.com/liba2k/fellow-mcp#readme",
+  "homepage": "https://github.com/jenscz/fellow-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.6.0"

@@ -2,16 +2,29 @@
 
 A local MCP (Model Context Protocol) server that wraps the Fellow.ai API, providing tools to access meeting data, transcripts, summaries, action items, and participants.
 
+Fork of [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp) with additional tools and fixes.
+
 **Features:**
 - Local SQLite database for caching meeting data
 - Automatic incremental sync to keep action items fresh
 - Full-text search across cached notes
 - Find meetings by participant
+- AI-detected meeting topics with timestamps
+- Time-filtered transcript slicing
 
 ## Installation
 
 ```bash
 npm install -g fellow-mcp
+```
+
+Or install from this fork:
+```bash
+git clone https://github.com/jenscz/fellow-mcp.git
+cd fellow-mcp
+npm install
+npm run build
+npm install -g .
 ```
 
 ## Setup
@@ -25,19 +38,22 @@ npm install -g fellow-mcp
 
 ### 2. Configure your MCP client
 
-Add the following to your MCP client configuration (e.g., `~/.config/opencode/opencode.json`):
+**Claude Code:**
+```bash
+claude mcp add fellow -- npx -y fellow-mcp
+```
 
+Or in `~/.claude.json`:
 ```json
 {
-  "mcp": {
+  "mcpServers": {
     "fellow": {
-      "type": "local",
-      "command": ["npx", "-y", "fellow-mcp"],
-      "environment": {
-        "FELLOW_API_KEY": "YOUR_FELLOW_API_KEY_HERE",
-        "FELLOW_SUBDOMAIN": "YOUR_SUBDOMAIN"
-      },
-      "enabled": true
+      "command": "npx",
+      "args": ["-y", "fellow-mcp"],
+      "env": {
+        "FELLOW_API_KEY": "your-api-key",
+        "FELLOW_SUBDOMAIN": "your-subdomain"
+      }
     }
   }
 }
@@ -84,6 +100,26 @@ Get the list of participants/attendees for a meeting.
 **Parameters:**
 - `note_id` (optional): The ID of the note
 - `meeting_title` (optional): Search by meeting title
+
+#### `get_meeting_topics`
+Get AI-detected topics/sections from a meeting with timestamps. Returns structured list of discussion topics, their time ranges, and bullet points. Much smaller than full transcript — use this first to understand meeting structure.
+
+**Parameters:**
+- `recording_id` (optional): The ID of the recording
+- `meeting_title` (optional): Search by meeting title
+
+#### `get_transcript_slice`
+Get a time-filtered slice of a meeting transcript. Use `get_meeting_topics` first to find the time range you need, then use this to get just that portion.
+
+**Parameters:**
+- `recording_id` (optional): The ID of the recording
+- `meeting_title` (optional): Search by meeting title
+- `from_seconds` (required): Start time in seconds (inclusive)
+- `to_seconds` (required): End time in seconds (inclusive)
+
+**Typical workflow:**
+1. `get_meeting_topics(meeting_title: "Weekly Standup")` — find topics and their time ranges
+2. `get_transcript_slice(meeting_title: "Weekly Standup", from_seconds: 264, to_seconds: 1666)` — get just that discussion
 
 ### Database Tools (Local SQLite cache)
 
@@ -143,22 +179,9 @@ The database stores:
 ## Development
 
 ```bash
-# Clone the repository
-git clone <repo-url>
-cd fellow-mcp
-
-# Install dependencies
-npm install
-
-# Create .env file with your credentials
-echo "FELLOW_API_KEY=your_api_key_here" > .env
-echo "FELLOW_SUBDOMAIN=your_subdomain" >> .env
-
-# Watch mode for development
-npm run dev
-
-# Build
-npm run build
+npm install        # Install dependencies
+npm run dev        # Watch mode
+npm run build      # Compile TypeScript
 
 # Test API connection
 node --env-file=.env test-api.js
@@ -175,6 +198,10 @@ FELLOW_API_KEY=your_key FELLOW_SUBDOMAIN=your_subdomain node test-mcp.js
 ## License
 
 MIT
+
+## Credits
+
+Based on [fellow-mcp](https://github.com/liba2k/fellow-mcp) by Itai Liba.
 
 ## API Reference
 

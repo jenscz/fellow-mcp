@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-03-05
+
+First release of the community fork ([jenscz/fellow-mcp](https://github.com/jenscz/fellow-mcp)).
+
+### Added
+- `get_meeting_topics` tool — exposes Fellow's AI-detected topics, decisions, and action items with timestamps from `ai_notes`
+- `get_transcript_slice` tool — time-filtered transcript retrieval to avoid context limit issues with long meetings
+- Direct Fellow meeting links (`fellow_url`) in search results
+- `ai_notes` support in `FellowClient.listRecordings()` via `include_ai_notes` parameter
+
+### Fixed
+- Transcript timestamps showing `NaN:NaN` — Fellow API returns `start`/`end` fields, not `start_time`/`end_time` as upstream assumed
+- `search_meetings` now shows actual meeting times instead of "N/A"
+- `get_meeting_topics` and `get_transcript_slice` now paginate through all recordings when searching by `recording_id` (previously only checked first 50)
+- `get_meeting_topics` and `get_transcript_slice` now require `recording_id` or `meeting_title` instead of silently returning the first recording
+- API error messages are sanitized to prevent leaking API keys in MCP responses
+
+### Changed
+- All API calls now go through `FellowClient` (removed raw `fetch` calls from tool handlers)
+- Removed unused `findRecording` helper
+- Repository ownership transferred to jenscz fork
+- Version jump to 2.0.0 to separate from upstream versioning
+
+---
+
+## Prior releases (upstream: [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp))
+
 ## [1.0.4] - 2026-01-28
 
 ### Fixed
@@ -62,7 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full-text search across cached notes
 - Find meetings by participant
 
-[Unreleased]: https://github.com/liba2k/fellow-mcp/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/jenscz/fellow-mcp/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/jenscz/fellow-mcp/releases/tag/v2.0.0
 [1.0.4]: https://github.com/liba2k/fellow-mcp/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/liba2k/fellow-mcp/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/liba2k/fellow-mcp/compare/v1.0.1...v1.0.2
