@@ -15,16 +15,10 @@ Fork of [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp) with additiona
 ## Installation
 
 ```bash
-npm install -g fellow-mcp
-```
-
-Or install from this fork:
-```bash
 git clone https://github.com/jenscz/fellow-mcp.git
 cd fellow-mcp
 npm install
 npm run build
-npm install -g .
 ```
 
 ## Setup
@@ -40,16 +34,16 @@ npm install -g .
 
 **Claude Code:**
 ```bash
-claude mcp add fellow -- npx -y fellow-mcp
+claude mcp add fellow -- node /path/to/fellow-mcp/dist/index.js
 ```
 
-Or in `~/.claude.json`:
+With environment variables in `~/.claude.json`:
 ```json
 {
   "mcpServers": {
     "fellow": {
-      "command": "npx",
-      "args": ["-y", "fellow-mcp"],
+      "command": "node",
+      "args": ["/path/to/fellow-mcp/dist/index.js"],
       "env": {
         "FELLOW_API_KEY": "your-api-key",
         "FELLOW_SUBDOMAIN": "your-subdomain"
@@ -58,6 +52,8 @@ Or in `~/.claude.json`:
   }
 }
 ```
+
+> **Note:** Replace `/path/to/fellow-mcp` with the actual path where you cloned the repository.
 
 ## Available Tools
 
