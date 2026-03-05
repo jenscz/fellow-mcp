@@ -13,8 +13,8 @@ import { FellowDatabase } from "./database.js";
 interface SpeechSegment {
   speaker: string;
   text: string;
-  start_time: number;
-  end_time: number;
+  start: number;
+  end: number;
 }
 
 interface Transcript {
@@ -414,6 +414,51 @@ const tools: Tool[] = [
     },
   },
   {
+    name: "get_meeting_topics",
+    description:
+      "Get AI-detected topics/sections from a meeting with timestamps. Returns structured list of discussion topics, their time ranges, and bullet points. Much smaller than full transcript - use this first to understand meeting structure.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        recording_id: {
+          type: "string",
+          description: "The ID of the recording",
+        },
+        meeting_title: {
+          type: "string",
+          description: "Alternatively, search by meeting title",
+        },
+      },
+    },
+  },
+  {
+    name: "get_transcript_slice",
+    description:
+      "Get a time-filtered slice of a meeting transcript. Use get_meeting_topics first to find the time range you need, then use this to get just that portion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        recording_id: {
+          type: "string",
+          description: "The ID of the recording",
+        },
+        meeting_title: {
+          type: "string",
+          description: "Alternatively, search by meeting title",
+        },
+        from_seconds: {
+          type: "number",
+          description: "Start time in seconds (inclusive)",
+        },
+        to_seconds: {
+          type: "number",
+          description: "End time in seconds (inclusive)",
+        },
+      },
+      required: ["from_seconds", "to_seconds"],
+    },
+  },
+  {
     name: "get_sync_status",
     description:
       "Get the current sync status and database statistics.",
@@ -764,6 +809,27 @@ function parseAssigneeAndDueDate(text: string): { assignee: string | null; dueDa
   return { assignee, dueDate };
 }
 
+
+// Helper: find recording with ai_notes or transcript
+async function findRecording(client: FellowClient, recording_id?: string, meeting_title?: string, includeTranscript = false, includeAiNotes = false): Promise<Recording | null> {
+  if (recording_id) {
+    const resp = await client.listRecordings({
+      include_transcript: includeTranscript,
+      page_size: 50,
+    });
+    // listRecordings doesn't pass ai_notes, so we need raw fetch for ai_notes
+    return resp.recordings.data.find((r) => r.id === recording_id) ?? null;
+  } else if (meeting_title) {
+    const resp = await client.listRecordings({
+      title: meeting_title,
+      include_transcript: includeTranscript,
+      page_size: 1,
+    });
+    return resp.recordings.data[0] ?? null;
+  }
+  return null;
+}
+
 // Format transcript for output
 function formatTranscript(transcript: Transcript): string {
   if (!transcript.speech_segments || transcript.speech_segments.length === 0) {
@@ -773,8 +839,8 @@ function formatTranscript(transcript: Transcript): string {
   let output = `Language: ${transcript.language_code}\n\n`;
   
   for (const segment of transcript.speech_segments) {
-    const startTime = formatTime(segment.start_time);
-    const endTime = formatTime(segment.end_time);
+    const startTime = formatTime(segment.start);
+    const endTime = formatTime(segment.end);
     output += `[${startTime} - ${endTime}] ${segment.speaker}: ${segment.text}\n`;
   }
 
@@ -782,6 +848,7 @@ function formatTranscript(transcript: Transcript): string {
 }
 
 function formatTime(seconds: number): string {
+  if (seconds == null || isNaN(seconds)) return "??:??";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
@@ -1487,6 +1554,125 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `# Sync Status\n\nLast sync: ${lastSync ?? "Never"}\n\n## Database Statistics:\n- Total notes: ${stats.notes}\n- Total recordings: ${stats.recordings}\n- Total action items: ${stats.action_items}\n- Unique participants: ${stats.participants}\n\n## Database Location:\n~/.fellow-mcp/fellow.db`,
             },
           ],
+        };
+      }
+
+      case "get_meeting_topics": {
+        const { recording_id, meeting_title } = args as {
+          recording_id?: string;
+          meeting_title?: string;
+        };
+
+        // We need ai_notes which requires raw API call
+        const { subdomain, apiKey } = parseArgs();
+        const searchBody: Record<string, unknown> = {
+          include: { ai_notes: true },
+          pagination: { cursor: null, page_size: 50 },
+        };
+        if (meeting_title) {
+          searchBody.filters = { title: meeting_title };
+          (searchBody.pagination as Record<string, unknown>).page_size = 1;
+        }
+
+        const topicsResp = await fetch(`https://${subdomain}.fellow.app/api/v1/recordings`, {
+          method: "POST",
+          headers: { "X-API-KEY": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify(searchBody),
+        });
+        const topicsData = await topicsResp.json() as { recordings: { data: Array<{ id: string; title: string; ai_notes?: Array<{ sections?: Array<{ title: string; content: unknown }> }> }> } };
+        
+        let targetRec = recording_id
+          ? topicsData.recordings.data.find((r: { id: string }) => r.id === recording_id)
+          : topicsData.recordings.data[0];
+
+        if (!targetRec) {
+          return { content: [{ type: "text", text: "Recording not found." }] };
+        }
+
+        const aiNotes = targetRec.ai_notes?.[0]?.sections || [];
+        const result: Record<string, unknown> = { recording_id: targetRec.id, title: targetRec.title, sections: {} as Record<string, unknown> };
+
+        for (const section of aiNotes) {
+          if (section.title === "Topics" && Array.isArray(section.content)) {
+            (result.sections as Record<string, unknown>).topics = section.content.map((topic: { title: string; bullet_points?: Array<{ timestamp: number; text: string }> }) => {
+              const bps = topic.bullet_points || [];
+              const firstTs = bps[0]?.timestamp ?? null;
+              const lastTs = bps[bps.length - 1]?.timestamp ?? null;
+              return {
+                title: topic.title,
+                from_seconds: firstTs,
+                to_seconds: lastTs,
+                from_time: firstTs != null ? formatTime(firstTs) : null,
+                to_time: lastTs != null ? formatTime(lastTs) : null,
+                bullet_points: bps.map((bp: { timestamp: number; text: string }) => ({
+                  timestamp: bp.timestamp,
+                  time: formatTime(bp.timestamp),
+                  text: bp.text,
+                })),
+              };
+            });
+          } else if (section.title === "Summary" && typeof section.content === "string") {
+            (result.sections as Record<string, unknown>).summary = section.content;
+          } else if (section.title === "Decisions" && Array.isArray(section.content)) {
+            (result.sections as Record<string, unknown>).decisions = section.content.map((d: { timestamp: number; text: string }) => ({
+              timestamp: d.timestamp,
+              time: formatTime(d.timestamp),
+              text: d.text,
+            }));
+          } else if (section.title === "Action items" && Array.isArray(section.content)) {
+            (result.sections as Record<string, unknown>).action_items = section.content.map((a: { timestamp: number; text: string; assignees?: Array<{ full_name: string }> ; status?: string }) => ({
+              timestamp: a.timestamp,
+              time: formatTime(a.timestamp),
+              text: a.text,
+              assignees: a.assignees?.map((p: { full_name: string }) => p.full_name) || [],
+              status: a.status,
+            }));
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "get_transcript_slice": {
+        const { recording_id, meeting_title, from_seconds, to_seconds } = args as {
+          recording_id?: string;
+          meeting_title?: string;
+          from_seconds: number;
+          to_seconds: number;
+        };
+
+        // Fetch recording with transcript
+        const recResp = await client.listRecordings({
+          ...(meeting_title ? { title: meeting_title } : {}),
+          include_transcript: true,
+          page_size: meeting_title ? 1 : 50,
+        });
+
+        let targetRecording = recording_id
+          ? recResp.recordings.data.find((r) => r.id === recording_id)
+          : recResp.recordings.data[0];
+
+        if (!targetRecording?.transcript?.speech_segments) {
+          return { content: [{ type: "text", text: "Recording or transcript not found." }] };
+        }
+
+        const filtered = targetRecording.transcript.speech_segments.filter(
+          (seg) => seg.start >= from_seconds && seg.start <= to_seconds
+        );
+
+        let output = `# Transcript Slice: ${targetRecording.title}\n`;
+        output += `Recording ID: ${targetRecording.id}\n`;
+        output += `Time range: ${formatTime(from_seconds)} - ${formatTime(to_seconds)}\n`;
+        output += `Segments: ${filtered.length}\n\n`;
+
+        for (const seg of filtered) {
+          output += `[${formatTime(seg.start)} - ${formatTime(seg.end)}] ${seg.speaker}: ${seg.text}\n`;
+        }
+
+        return {
+          content: [{ type: "text", text: output }],
         };
       }
 
