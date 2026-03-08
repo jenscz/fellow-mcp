@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-03-08
+
+### Added
+- DB-first caching for recordings — `get_meeting_transcript`, `get_meeting_topics`, and `get_transcript_slice` now check local SQLite cache before calling Fellow API
+- `ai_notes_json` column in recordings table with automatic schema migration
+- `searchRecordingByTitle()` database method
+- `resolveRecording()` helper: DB lookup → API fallback → cache result
+
+### Fixed
+- `npx fellow-mcp` changed to `npx -y fellow-mcp` in docs to prevent interactive prompt blocking MCP startup
+- Corrupted JSON in database no longer crashes tool calls — falls back to API
+- Foreign key constraint error when caching recordings before notes are synced — cache is now best-effort
+
 ## [2.0.0] - 2026-03-05
 
 First release of the community fork ([jenscz/fellow-mcp](https://github.com/jenscz/fellow-mcp)).
@@ -89,7 +102,8 @@ First release of the community fork ([jenscz/fellow-mcp](https://github.com/jens
 - Full-text search across cached notes
 - Find meetings by participant
 
-[Unreleased]: https://github.com/jenscz/fellow-mcp/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/jenscz/fellow-mcp/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/jenscz/fellow-mcp/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/jenscz/fellow-mcp/releases/tag/v2.0.0
 [1.0.4]: https://github.com/liba2k/fellow-mcp/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/liba2k/fellow-mcp/compare/v1.0.2...v1.0.3
