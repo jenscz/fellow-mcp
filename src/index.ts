@@ -1,4 +1,4 @@
-,#!/usr/bin/env node
+#!/usr/bin/env node
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -689,6 +689,7 @@ async function syncNotesFromApi(
           event_guid: recording.event_guid ?? null,
           call_url: recording.call_url ?? null,
           transcript_json: recording.transcript ? JSON.stringify(recording.transcript) : null,
+          ai_notes_json: null,
         });
         result.recordings_synced++;
       }
@@ -879,6 +880,112 @@ function getFellowUrl(subdomain: string, eventGuid: string | null | undefined): 
   return eventGuid ? `https://${subdomain}.fellow.app/meetings/${eventGuid}` : null;
 }
 
+// DB-first recording resolver: checks local cache, falls back to API, caches result
+async function resolveRecording(
+  client: FellowClient,
+  db: FellowDatabase,
+  options: {
+    recording_id?: string;
+    meeting_title?: string;
+    need?: { transcript?: boolean; ai_notes?: boolean };
+  }
+): Promise<Recording | null> {
+  const need = options.need ?? {};
+
+  // 1. Try DB first
+  let stored: import("./database.js").StoredRecording | null = null;
+  if (options.recording_id) {
+    stored = db.getRecording(options.recording_id);
+  } else if (options.meeting_title) {
+    stored = db.searchRecordingByTitle(options.meeting_title);
+  }
+
+  if (stored) {
+    const recording = storedToRecording(stored);
+    const hasTranscript = !need.transcript || recording.transcript != null;
+    const hasAiNotes = !need.ai_notes || recording.ai_notes != null;
+    if (hasTranscript && hasAiNotes) {
+      return recording;
+    }
+  }
+
+  // 2. Fetch from API (only the data we need)
+  let recording: Recording | null = null;
+  if (options.meeting_title) {
+    const resp = await client.listRecordings({
+      title: options.meeting_title,
+      include_transcript: need.transcript,
+      include_ai_notes: need.ai_notes,
+      page_size: 1,
+    });
+    recording = resp.recordings.data[0] ?? null;
+  } else if (options.recording_id) {
+    let cursor: string | null = null;
+    do {
+      const resp = await client.listRecordings({
+        include_transcript: need.transcript,
+        include_ai_notes: need.ai_notes,
+        cursor: cursor ?? undefined,
+        page_size: 50,
+      });
+      recording = resp.recordings.data.find((r) => r.id === options.recording_id) ?? null;
+      cursor = recording ? null : resp.recordings.page_info.cursor;
+    } while (!recording && cursor);
+  }
+
+  // 3. Cache in DB for next time (best-effort — skip if FK constraint fails e.g. note not synced yet)
+  if (recording) {
+    try {
+      db.upsertRecording({
+        id: recording.id,
+        note_id: recording.note_id,
+        title: recording.title,
+        created_at: recording.created_at,
+        updated_at: recording.updated_at,
+        event_start: recording.event_start ?? null,
+        event_end: recording.event_end ?? null,
+        recording_start: recording.recording_start ?? null,
+        recording_end: recording.recording_end ?? null,
+        event_guid: recording.event_guid ?? null,
+        call_url: recording.call_url ?? null,
+        transcript_json: recording.transcript ? JSON.stringify(recording.transcript) : null,
+        ai_notes_json: recording.ai_notes ? JSON.stringify(recording.ai_notes) : null,
+      });
+    } catch {
+      // FK constraint or other DB error — data still returned from API
+    }
+  }
+
+  return recording;
+}
+
+function safeJsonParse<T>(json: string | null): T | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function storedToRecording(stored: import("./database.js").StoredRecording): Recording {
+  return {
+    id: stored.id,
+    note_id: stored.note_id,
+    title: stored.title,
+    created_at: stored.created_at,
+    updated_at: stored.updated_at,
+    event_start: stored.event_start ?? undefined,
+    event_end: stored.event_end ?? undefined,
+    recording_start: stored.recording_start ?? undefined,
+    recording_end: stored.recording_end ?? undefined,
+    event_guid: stored.event_guid ?? undefined,
+    call_url: stored.call_url ?? undefined,
+    transcript: safeJsonParse<Transcript>(stored.transcript_json),
+    ai_notes: safeJsonParse<AiNote[]>(stored.ai_notes_json),
+  };
+}
+
 // Handle tool calls
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
@@ -976,35 +1083,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           meeting_title?: string;
         };
 
-        let recordingWithTranscript: Recording | null = null;
-
-        if (recording_id) {
-          // Get the specific recording with transcript
-          const recordingsResp = await client.listRecordings({
-            include_transcript: true,
-            page_size: 50,
-          });
-          recordingWithTranscript =
-            recordingsResp.recordings.data.find((r) => r.id === recording_id) ?? null;
-          
-          if (!recordingWithTranscript) {
-            // Try fetching all to find it
-            const allRecordingsResp = await client.listRecordings({
-              include_transcript: true,
-              page_size: 50,
-            });
-            recordingWithTranscript =
-              allRecordingsResp.recordings.data.find((r) => r.id === recording_id) ?? null;
-          }
-        } else if (meeting_title) {
-          // Search by title and get transcript
-          const recordingsResp = await client.listRecordings({
-            title: meeting_title,
-            include_transcript: true,
-            page_size: 1,
-          });
-          recordingWithTranscript = recordingsResp.recordings.data[0] ?? null;
-        }
+        const recordingWithTranscript = await resolveRecording(client, getDatabase(), {
+          recording_id, meeting_title, need: { transcript: true },
+        });
 
         if (!recordingWithTranscript) {
           return {
@@ -1562,27 +1643,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: "Please provide a recording_id or meeting_title." }] };
         }
 
-        let targetRec: Recording | undefined;
-        if (recording_id) {
-          // Paginate to find the specific recording
-          let cursor: string | null = null;
-          do {
-            const resp = await client.listRecordings({
-              include_ai_notes: true,
-              cursor: cursor ?? undefined,
-              page_size: 50,
-            });
-            targetRec = resp.recordings.data.find((r) => r.id === recording_id);
-            cursor = targetRec ? null : resp.recordings.page_info.cursor;
-          } while (!targetRec && cursor);
-        } else {
-          const resp = await client.listRecordings({
-            title: meeting_title,
-            include_ai_notes: true,
-            page_size: 1,
-          });
-          targetRec = resp.recordings.data[0];
-        }
+        const targetRec = await resolveRecording(client, getDatabase(), {
+          recording_id, meeting_title, need: { ai_notes: true },
+        });
 
         if (!targetRec) {
           return { content: [{ type: "text", text: "Recording not found." }] };
@@ -1646,27 +1709,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: "Please provide a recording_id or meeting_title." }] };
         }
 
-        let targetRecording: Recording | undefined;
-        if (recording_id) {
-          // Paginate to find the specific recording
-          let cursor: string | null = null;
-          do {
-            const resp = await client.listRecordings({
-              include_transcript: true,
-              cursor: cursor ?? undefined,
-              page_size: 50,
-            });
-            targetRecording = resp.recordings.data.find((r) => r.id === recording_id);
-            cursor = targetRecording ? null : resp.recordings.page_info.cursor;
-          } while (!targetRecording && cursor);
-        } else {
-          const resp = await client.listRecordings({
-            title: meeting_title,
-            include_transcript: true,
-            page_size: 1,
-          });
-          targetRecording = resp.recordings.data[0];
-        }
+        const targetRecording = await resolveRecording(client, getDatabase(), {
+          recording_id, meeting_title, need: { transcript: true },
+        });
 
         if (!targetRecording?.transcript?.speech_segments) {
           return { content: [{ type: "text", text: "Recording or transcript not found." }] };

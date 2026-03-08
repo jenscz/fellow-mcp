@@ -19,6 +19,7 @@ git clone https://github.com/jenscz/fellow-mcp.git
 cd fellow-mcp
 npm install
 npm run build
+npm install -g .
 ```
 
 ## Setup
@@ -34,16 +35,16 @@ npm run build
 
 **Claude Code:**
 ```bash
-claude mcp add fellow -- node /path/to/fellow-mcp/dist/index.js
+claude mcp add fellow -- npx -y fellow-mcp
 ```
 
-With environment variables in `~/.claude.json`:
+Or in `~/.claude.json`:
 ```json
 {
   "mcpServers": {
     "fellow": {
-      "command": "node",
-      "args": ["/path/to/fellow-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["fellow-mcp"],
       "env": {
         "FELLOW_API_KEY": "your-api-key",
         "FELLOW_SUBDOMAIN": "your-subdomain"
@@ -52,8 +53,6 @@ With environment variables in `~/.claude.json`:
   }
 }
 ```
-
-> **Note:** Replace `/path/to/fellow-mcp` with the actual path where you cloned the repository.
 
 ## Available Tools
 

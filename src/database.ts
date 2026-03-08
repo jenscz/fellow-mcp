@@ -29,6 +29,7 @@ export interface StoredRecording {
   event_guid: string | null;
   call_url: string | null;
   transcript_json: string | null;
+  ai_notes_json: string | null;
   synced_at: string;
 }
 
@@ -64,6 +65,7 @@ export class FellowDatabase {
     this.db = new Database(finalPath);
     this.db.pragma("journal_mode = WAL");
     this.initSchema();
+    this.migrateSchema();
   }
 
   private initSchema(): void {
@@ -132,6 +134,14 @@ export class FellowDatabase {
     `);
   }
 
+  private migrateSchema(): void {
+    // Add ai_notes_json column for existing databases
+    const columns = this.db.pragma("table_info(recordings)") as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === "ai_notes_json")) {
+      this.db.exec("ALTER TABLE recordings ADD COLUMN ai_notes_json TEXT");
+    }
+  }
+
   // Notes
   upsertNote(note: Omit<StoredNote, "synced_at">): void {
     const stmt = this.db.prepare(`
@@ -184,8 +194,8 @@ export class FellowDatabase {
   // Recordings
   upsertRecording(recording: Omit<StoredRecording, "synced_at">): void {
     const stmt = this.db.prepare(`
-      INSERT INTO recordings (id, note_id, title, created_at, updated_at, event_start, event_end, recording_start, recording_end, event_guid, call_url, transcript_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO recordings (id, note_id, title, created_at, updated_at, event_start, event_end, recording_start, recording_end, event_guid, call_url, transcript_json, ai_notes_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         note_id = excluded.note_id,
         title = excluded.title,
@@ -197,6 +207,7 @@ export class FellowDatabase {
         event_guid = excluded.event_guid,
         call_url = excluded.call_url,
         transcript_json = COALESCE(excluded.transcript_json, transcript_json),
+        ai_notes_json = COALESCE(excluded.ai_notes_json, ai_notes_json),
         synced_at = excluded.synced_at
     `);
     stmt.run(
@@ -212,6 +223,7 @@ export class FellowDatabase {
       recording.event_guid,
       recording.call_url,
       recording.transcript_json,
+      recording.ai_notes_json,
       new Date().toISOString()
     );
   }
@@ -219,6 +231,13 @@ export class FellowDatabase {
   getRecording(id: string): StoredRecording | null {
     const stmt = this.db.prepare("SELECT * FROM recordings WHERE id = ?");
     return stmt.get(id) as StoredRecording | null;
+  }
+
+  searchRecordingByTitle(title: string): StoredRecording | null {
+    const stmt = this.db.prepare(
+      "SELECT * FROM recordings WHERE title LIKE ? ORDER BY created_at DESC LIMIT 1"
+    );
+    return stmt.get(`%${title}%`) as StoredRecording | null;
   }
 
   // Action Items
