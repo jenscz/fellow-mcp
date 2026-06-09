@@ -1,5 +1,7 @@
 # Fellow MCP Server
 
+> **Disclaimer:** This is an unofficial, community-maintained MCP server for the Fellow.ai API. It is not affiliated with, endorsed by, or associated with Fellow, Inc. "Fellow" is a registered trademark of Fellow, Inc.
+
 A local MCP (Model Context Protocol) server that wraps the Fellow.ai API, providing tools to access meeting data, transcripts, summaries, action items, and participants.
 
 Fork of [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp) with additional tools and fixes.
