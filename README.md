@@ -5,7 +5,7 @@
 
 A local MCP (Model Context Protocol) server that wraps the Fellow.ai API, providing tools to access meeting data, transcripts, summaries, action items, and participants.
 
-Fork of [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp) with additional tools and fixes.
+Fork of [liba2k/unofficial-fellow-mcp](https://github.com/liba2k/unofficial-fellow-mcp) with additional tools and fixes.
 
 **Features:**
 - Local SQLite database for caching meeting data
@@ -16,6 +16,8 @@ Fork of [liba2k/fellow-mcp](https://github.com/liba2k/fellow-mcp) with additiona
 - Time-filtered transcript slicing
 
 ## Installation
+
+This fork is **not published to npm** — install it from source. The final `npm install -g .` puts the `fellow-mcp` command on your `PATH`:
 
 ```bash
 git clone https://github.com/jenscz/fellow-mcp.git
@@ -38,16 +40,18 @@ npm install -g .
 
 **Claude Code:**
 ```bash
-claude mcp add fellow -- npx -y fellow-mcp
+claude mcp add fellow \
+  -e FELLOW_API_KEY=your-api-key \
+  -e FELLOW_SUBDOMAIN=your-subdomain \
+  -- fellow-mcp
 ```
 
-Or in `~/.claude.json`:
+Or in `~/.claude.json` (the `fellow-mcp` command comes from `npm install -g .` above):
 ```json
 {
   "mcpServers": {
     "fellow": {
-      "command": "npx",
-      "args": ["fellow-mcp"],
+      "command": "fellow-mcp",
       "env": {
         "FELLOW_API_KEY": "your-api-key",
         "FELLOW_SUBDOMAIN": "your-subdomain"
@@ -56,6 +60,9 @@ Or in `~/.claude.json`:
   }
 }
 ```
+
+> If your MCP client doesn't pick up the global `PATH`, point it straight at the build instead:
+> `"command": "node", "args": ["/absolute/path/to/fellow-mcp/dist/index.js"]`
 
 ## Available Tools
 
@@ -199,7 +206,7 @@ MIT
 
 ## Credits
 
-Based on [fellow-mcp](https://github.com/liba2k/fellow-mcp) by Itai Liba.
+Based on [unofficial-fellow-mcp](https://github.com/liba2k/unofficial-fellow-mcp) by Itai Liba.
 
 ## API Reference
 
