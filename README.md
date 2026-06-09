@@ -1,6 +1,7 @@
 # Fellow MCP Server
 
-> **Disclaimer:** This is an unofficial, community-maintained MCP server for the Fellow.ai API. It is not affiliated with, endorsed by, or associated with Fellow, Inc. "Fellow" is a registered trademark of Fellow, Inc.
+> [!IMPORTANT]
+> **Unofficial — a community project.** This MCP server wraps the Fellow.ai API so you can reach *your own* meeting data from *your own* tools. It is not built by, affiliated with, or endorsed by Fellow, Inc. "Fellow" is a registered trademark of Fellow, Inc., used here only to name the API this server connects to.
 
 A local MCP (Model Context Protocol) server that wraps the Fellow.ai API, providing tools to access meeting data, transcripts, summaries, action items, and participants.
 
