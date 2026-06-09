@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import path from "path";
 import os from "os";
 import fs from "fs";
@@ -50,7 +50,7 @@ export interface StoredParticipant {
 }
 
 export class FellowDatabase {
-  private db: Database.Database;
+  private db: DatabaseSync;
 
   constructor(dbPath?: string) {
     const defaultPath = path.join(os.homedir(), ".fellow-mcp", "fellow.db");
@@ -62,8 +62,8 @@ export class FellowDatabase {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    this.db = new Database(finalPath);
-    this.db.pragma("journal_mode = WAL");
+    this.db = new DatabaseSync(finalPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
     this.initSchema();
     this.migrateSchema();
   }
@@ -136,7 +136,9 @@ export class FellowDatabase {
 
   private migrateSchema(): void {
     // Add ai_notes_json column for existing databases
-    const columns = this.db.pragma("table_info(recordings)") as Array<{ name: string }>;
+    const columns = this.db
+      .prepare("PRAGMA table_info(recordings)")
+      .all() as Array<{ name: string }>;
     if (!columns.some((c) => c.name === "ai_notes_json")) {
       this.db.exec("ALTER TABLE recordings ADD COLUMN ai_notes_json TEXT");
     }
@@ -173,12 +175,12 @@ export class FellowDatabase {
 
   getNote(id: string): StoredNote | null {
     const stmt = this.db.prepare("SELECT * FROM notes WHERE id = ?");
-    return stmt.get(id) as StoredNote | null;
+    return stmt.get(id) as unknown as StoredNote | null;
   }
 
   getAllNotes(): StoredNote[] {
     const stmt = this.db.prepare("SELECT * FROM notes ORDER BY event_start DESC");
-    return stmt.all() as StoredNote[];
+    return stmt.all() as unknown as StoredNote[];
   }
 
   searchNotes(query: string): StoredNote[] {
@@ -188,7 +190,7 @@ export class FellowDatabase {
       ORDER BY event_start DESC
     `);
     const pattern = `%${query}%`;
-    return stmt.all(pattern, pattern) as StoredNote[];
+    return stmt.all(pattern, pattern) as unknown as StoredNote[];
   }
 
   // Recordings
@@ -230,14 +232,14 @@ export class FellowDatabase {
 
   getRecording(id: string): StoredRecording | null {
     const stmt = this.db.prepare("SELECT * FROM recordings WHERE id = ?");
-    return stmt.get(id) as StoredRecording | null;
+    return stmt.get(id) as unknown as StoredRecording | null;
   }
 
   searchRecordingByTitle(title: string): StoredRecording | null {
     const stmt = this.db.prepare(
       "SELECT * FROM recordings WHERE title LIKE ? ORDER BY created_at DESC LIMIT 1"
     );
-    return stmt.get(`%${title}%`) as StoredRecording | null;
+    return stmt.get(`%${title}%`) as unknown as StoredRecording | null;
   }
 
   // Action Items
@@ -272,7 +274,7 @@ export class FellowDatabase {
       JOIN notes n ON a.note_id = n.id
       WHERE 1=1
     `;
-    const params: unknown[] = [];
+    const params: (string | number)[] = [];
 
     if (filters?.assignee) {
       query += " AND a.assignee LIKE ?";
@@ -290,7 +292,7 @@ export class FellowDatabase {
     query += " ORDER BY n.event_start DESC";
 
     const stmt = this.db.prepare(query);
-    return stmt.all(...params) as (StoredActionItem & { note_title: string; event_start: string | null })[];
+    return stmt.all(...params) as unknown as (StoredActionItem & { note_title: string; event_start: string | null })[];
   }
 
   // Participants
@@ -316,7 +318,7 @@ export class FellowDatabase {
       WHERE p.email IN (${placeholders})
       ORDER BY n.event_start DESC
     `);
-    return stmt.all(...emails) as StoredNote[];
+    return stmt.all(...emails) as unknown as StoredNote[];
   }
 
   getMeetingsWithAllParticipants(emails: string[]): StoredNote[] {
@@ -331,7 +333,7 @@ export class FellowDatabase {
       ) = ?
       ORDER BY n.event_start DESC
     `);
-    return stmt.all(...emails, emails.length) as StoredNote[];
+    return stmt.all(...emails, emails.length) as unknown as StoredNote[];
   }
 
   getParticipantsForNote(noteId: string): string[] {

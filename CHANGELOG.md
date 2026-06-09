@@ -12,7 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sync_meetings` silently stored **zero** participants — the `typeof email === "string"` guard dropped every attendee object, leaving the `participants` cache empty and breaking `get_meetings_by_participants` and participant counts
 
 ### Changed
+- **Replaced `better-sqlite3` (native module) with Node's built-in `node:sqlite`** — removes the native-compilation / prebuilt-binary dependency, so the server no longer breaks when Node bumps its ABI (this was the Node 26 build failure: `better-sqlite3@11` could not compile against Node 26's V8)
+- **Minimum Node version raised to 22.13.0** — the first release where `node:sqlite` works without the `--experimental-sqlite` flag (also backported from Node 23.4.0)
 - Participant emails are normalized (trim + lowercase) on both store and lookup, so `get_meetings_by_participants` matches case-insensitively and de-duplicates correctly
+
+### Removed
+- `better-sqlite3` and `@types/better-sqlite3` dependencies (replaced by built-in `node:sqlite`)
 
 ## [2.0.1] - 2026-03-08
 

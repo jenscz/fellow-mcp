@@ -187,7 +187,7 @@ FELLOW_API_KEY=your_key FELLOW_SUBDOMAIN=your_subdomain node test-mcp.js
 
 ## Requirements
 
-- Node.js >= 18.0.0
+- Node.js >= 22.13.0 (uses the built-in `node:sqlite` module — no native build step required)
 - A Fellow.ai account with API access
 
 ## License
