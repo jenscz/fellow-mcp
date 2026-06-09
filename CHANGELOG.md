@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-06-09
+
 ### Fixed
 - `get_meeting_participants` returned `- [object Object]` instead of email addresses — Fellow's `event_attendees` are objects (`{ email }`), not bare strings as the code assumed
 - `sync_meetings` silently stored **zero** participants — the `typeof email === "string"` guard dropped every attendee object, leaving the `participants` cache empty and breaking `get_meetings_by_participants` and participant counts
@@ -114,7 +116,8 @@ First release of the community fork ([jenscz/fellow-mcp](https://github.com/jens
 - Full-text search across cached notes
 - Find meetings by participant
 
-[Unreleased]: https://github.com/jenscz/fellow-mcp/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/jenscz/fellow-mcp/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/jenscz/fellow-mcp/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/jenscz/fellow-mcp/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/jenscz/fellow-mcp/releases/tag/v2.0.0
 [1.0.4]: https://github.com/liba2k/fellow-mcp/compare/v1.0.3...v1.0.4
