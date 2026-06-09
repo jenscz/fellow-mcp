@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `get_meeting_participants` returned `- [object Object]` instead of email addresses — Fellow's `event_attendees` are objects (`{ email }`), not bare strings as the code assumed
+- `sync_meetings` silently stored **zero** participants — the `typeof email === "string"` guard dropped every attendee object, leaving the `participants` cache empty and breaking `get_meetings_by_participants` and participant counts
+
+### Changed
+- Participant emails are normalized (trim + lowercase) on both store and lookup, so `get_meetings_by_participants` matches case-insensitively and de-duplicates correctly
+
 ## [2.0.1] - 2026-03-08
 
 ### Added

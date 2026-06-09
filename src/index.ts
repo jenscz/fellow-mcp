@@ -58,7 +58,13 @@ interface Note {
   call_url?: string;
   recording_ids?: string[];
   content_markdown?: string;
-  event_attendees?: string[];
+  event_attendees?: EventAttendee[];
+}
+
+// Fellow returns calendar attendees as objects, e.g. [{ email: "a@b.com" }],
+// not as bare email strings.
+interface EventAttendee {
+  email?: string;
 }
 
 interface PageInfo {
@@ -624,13 +630,12 @@ async function syncNotesFromApi(
         }
 
         // Store participants
-        if (note.event_attendees && note.event_attendees.length > 0) {
+        const attendeeEmails = extractAttendeeEmails(note.event_attendees);
+        if (attendeeEmails.length > 0) {
           db.clearParticipantsForNote(note.id);
-          for (const email of note.event_attendees) {
-            if (email && typeof email === "string" && email.trim()) {
-              db.insertParticipant(note.id, email.trim());
-              result.participants_synced++;
-            }
+          for (const email of attendeeEmails) {
+            db.insertParticipant(note.id, email);
+            result.participants_synced++;
           }
         }
       }
@@ -878,6 +883,38 @@ function formatDateTime(isoString: string | null | undefined): string {
 // Helper to construct Fellow URLs
 function getFellowUrl(subdomain: string, eventGuid: string | null | undefined): string | null {
   return eventGuid ? `https://${subdomain}.fellow.app/meetings/${eventGuid}` : null;
+}
+
+// Normalize an email for storage and comparison: trim + lowercase. Emails are
+// effectively case-insensitive in practice, so this keeps de-dup and the
+// participant lookups in get_meetings_by_participants consistent.
+function normalizeEmail(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+// Fellow's event_attendees are objects like { email: "a@b.com" }. Defensively
+// accept a bare string too (older API shape) and return a normalized email or null.
+function extractAttendeeEmail(attendee: unknown): string | null {
+  if (typeof attendee === "string") {
+    return normalizeEmail(attendee);
+  }
+  if (attendee && typeof attendee === "object" && "email" in attendee) {
+    const email = (attendee as { email?: unknown }).email;
+    if (typeof email === "string") {
+      return normalizeEmail(email);
+    }
+  }
+  return null;
+}
+
+// Normalize a list of event_attendees into a clean, de-duplicated email list.
+function extractAttendeeEmails(attendees: unknown): string[] {
+  if (!Array.isArray(attendees)) return [];
+  const emails = attendees
+    .map(extractAttendeeEmail)
+    .filter((e): e is string => e !== null);
+  return [...new Set(emails)];
 }
 
 // DB-first recording resolver: checks local cache, falls back to API, caches result
@@ -1331,7 +1368,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const attendees = note.event_attendees ?? [];
+        const attendees = extractAttendeeEmails(note.event_attendees);
 
         const { subdomain } = parseArgs();
         const fellowUrl = getFellowUrl(subdomain, note.event_guid);
@@ -1507,10 +1544,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        // Normalize inputs to match how emails are stored (trim + lowercase).
+        const normalizedEmails = [
+          ...new Set(emails.map(normalizeEmail).filter((e): e is string => e !== null)),
+        ];
+
         const db = getDatabase();
         const meetings = require_all
-          ? db.getMeetingsWithAllParticipants(emails)
-          : db.getMeetingsByParticipants(emails);
+          ? db.getMeetingsWithAllParticipants(normalizedEmails)
+          : db.getMeetingsByParticipants(normalizedEmails);
 
         if (meetings.length === 0) {
           return {
